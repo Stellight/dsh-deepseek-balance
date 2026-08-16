@@ -1,21 +1,21 @@
 {
   "name": "dsh-deepseek-balance",
-  "version": "1.0.0",
-  "description": "DeepSeek Harness dynamic Cordis plugin: real-time DeepSeek account balance widget with official top-up entry",
-  "keywords": [
-    "deepseek",
-    "deepseek-harness",
-    "dsh",
-    "dsh-plugin",
-    "cordis",
-    "balance",
-    "top-up"
-  ],
-  "license": "MIT",
-  "files": [
-    "host.js",
-    "client.js",
-    "README.md",
-    "LICENSE"
-  ]
+  "version": "1.1.0",
+  "description": "DeepSeek Harness plugin: real-time DeepSeek account balance widget with official top-up entry",
+  "type": "module",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./dsh": "./dsh/index.js",
+    "./package.json": "./package.json",
+    "./client": "./dsh/client.js"
+  },
+  "dsh": {
+    "client": {
+      "inject": [],
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "keywords": ["deepseek", "deepseek-harness", "dsh", "dsh-plugin", "cordis", "balance", "top-up"],
+  "license": "MIT"
 }
