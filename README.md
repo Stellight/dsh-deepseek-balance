@@ -1,6 +1,6 @@
 # dsh-deepseek-balance
 
-DeepSeek Harness 动态 Cordis 插件：在页面内**实时显示 DeepSeek 账户余额**，并提供**官方充值入口**。
+DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek 账户余额**，并提供**官方充值入口**。
 
 ![dsh-plugin](https://img.shields.io/badge/dsh-plugin-blue)
 
@@ -9,42 +9,46 @@ DeepSeek Harness 动态 Cordis 插件：在页面内**实时显示 DeepSeek 账�
 - **实时余额**：调用官方接口 `api.deepseek.com/user/balance`，展示可用总额 / 充值余额 / 赠送余额（支持多币种 CNY/USD）；
 - **自动刷新**：每 60 秒自动刷新，支持手动「立即刷新」，状态灯（绿/黄/红）与「更新于 HH:MM:SS」时间戳；
 - **官方充值**：「官方充值 ↗」一键直达 DeepSeek 官方充值页 `platform.deepseek.com/top_up`（新标签页），附 API Key 创建入口；
-- **嵌入式 UI**：显示在左侧边栏底部、设置按钮上方（`sidebar.footer.action` 插槽），随明暗主题自适应；侧边栏收起（rail）时显示金额图标；
-- **密钥管理**：支持手动输入 / 更换 / 清除 API Key，界面只显示掩码（`sk-···xxxx`），可持久化到 DSH 凭证库。
+- **嵌入式 UI**：显示在左侧边栏底部、Cordis Plugin 选项上方（`sidebar.footer.action` 插槽），随明暗主题自适应；侧边栏收起（rail）时显示金额图标；
+- **密钥管理**：支持手动输入 / 更换 / 清除 API Key，界面只显示掩码（`sk-···xxxx`）。
+
+## 架构（dual-face，无构建步骤）
+
+| 文件 | 半区 | 说明 |
+| --- | --- | --- |
+| `dsh/index.js` | Host | ESM 插件：Node 原生 `fetch` 调用官方余额接口；在本地 dsh web 服务器上注册同源 HTTP 路由（`/dsh-balance/config`、`/dsh-balance/key`、`/dsh-balance/key/clear`、`/dsh-balance/fetch`、`/dsh-balance/topup`）供浏览器半区调用 |
+| `dsh/client.js` | Client | 手写 lazy-CJS bundle（`window.__ModuleLoader__.load` 协议，与内置 client 插件同格式）：React UI、主题 token 样式、静默重试连接宿主 |
+
+客户端与宿主的通信走**同源 HTTP 路由**（页面由 dsh 的本地 web 服务器提供），不依赖动态插件专属的 `host.call` 机制。
 
 ## 安全说明
 
 - **仓库代码中不包含任何 API Key**。密钥按以下顺序从运行时获取：
   1. 会话内存（用户在面板中输入的密钥）；
-  2. DSH 凭证库 ref `DEEPSEEK_BALANCE_API_KEY`（`~/.dsh/.credentials.yaml`）；
-  3. 凭证库 / 环境中的 `DEEPSEEK_API_KEY`。
-- 密钥仅经**子进程环境变量**传给 curl，不写入命令行、不落盘、不进入会话日志；
-- 余额请求只发往官方接口 `api.deepseek.com/user/balance`。
+  2. 进程环境变量 `DEEPSEEK_API_KEY`（同步快路径，避免启动期拥塞）；
+  3. DSH 凭证库 ref `DEEPSEEK_BALANCE_API_KEY`（`~/.dsh/.credentials.yaml`）。
+- 密钥仅在本机进程内用于调用官方余额接口，不出网、不落盘。
 
-## 安装（动态 Cordis 插件）
+## 安装（dsh profile 插件）
 
-在 DeepSeek Harness 会话中：
+本包通过 dsh 的 **profile 补丁层**挂载（与 modlens 等外置插件同机制）：
 
-1. `cordis_define`：
-   - `plugin.kind: "new"`，`idPrefix` 自定义（如 `dsbal`）；
-   - `code.host` = 本仓库 [`host.js`](host.js) 的文件内容；
-   - `code.client` = 本仓库 [`client.js`](client.js) 的文件内容；
-2. `cordis_run` 激活返回的 `pluginId` / `packageId`；
-3. 在页面运行卡片上批准。
+1. 找到你的 dsh profile 目录（默认 `~/.dsh/profiles/web/`）；
+2. 把本包放入 profile 的 `node_modules`：
+   - 方式 A：在 profile 目录内执行 `npm install dsh-deepseek-balance`；
+   - 方式 B：手动复制本包到 `~/.dsh/profiles/web/node_modules/dsh-deepseek-balance/`；
+3. 在 profile 的 `cordis.patch.yml` 中追加：
+   ```yaml
+   - insert:
+       - id: dsh-deepseek-balance
+         name: 'dsh-deepseek-balance'
+   ```
+4. 重启 harness（`dsh web`）。卡片自动出现在左侧边栏底部，无需批准、无需每次重装。
 
-## 平台说明
+## 版本历史
 
-- Host 半区通过宿主 `shell` 服务执行 curl 请求余额接口（动态插件沙箱禁止直接 `fetch`，而 `web` 服务不支持自定义请求头）；
-- 本机部署的 `shell` 服务若为 PowerShell 执行器（Windows），命令已按 PowerShell 5.1 语法编写；若为 bash 执行器，请将 `fetchBalance` 中的命令替换为 bash 语法（见 `host.js` 注释）；
-- 沙箱策略按执行器指引声明 `danger-full-access`：部分 Windows 主机的 ACL 沙箱后端因工作区覆盖系统临时目录而不可用，受限模式一律拒绝执行。命令为静态构造（无用户可控内容），密钥经环境变量传递。
-
-## 文件
-
-| 文件 | 说明 |
-| --- | --- |
-| `host.js` | `code.host`：余额请求、密钥管理、RPC 处理器 |
-| `client.js` | `code.client`：侧边栏 UI、自动刷新、官方充值入口 |
-| `package.json` | npm 元信息（keywords 含 `dsh-plugin`） |
+- 1.1.0 — 静态 dual-face 重构：Node 原生 fetch + 同源 HTTP 路由（不再依赖 shell/curl）；嵌入式侧边栏卡片置顶（Cordis Plugin 上方）；
+- 1.0.x — 动态 Cordis 插件原型（`cordis_define` + `cordis_run`，见 git 历史）。
 
 ## License
 
