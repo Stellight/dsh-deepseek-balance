@@ -288,7 +288,7 @@ return {
 
     slots.inject('sidebar.footer.action', function () {
       return slots.register(
-        { name: 'sidebar.footer.action', id: 'deepseek-balance-widget', order: 10, label: 'DeepSeek 余额' },
+        { name: 'sidebar.footer.action', id: 'deepseek-balance-widget', order: -10, label: 'DeepSeek 余额' },
         function (props) { return React.createElement(BalanceWidget, { wide: props !== undefined && props.wide === true }) },
       )
     })
