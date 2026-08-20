@@ -1,0 +1,5 @@
+# dsh bundle layer: mount the dsh-deepseek-balance plugin (dsh/index.js via the
+# package root export).
+- insert:
+    - id: dsh-deepseek-balance
+      name: 'dsh-deepseek-balance'
