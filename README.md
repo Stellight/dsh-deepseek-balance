@@ -31,22 +31,33 @@ DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek �
 
 ## 安装（dsh profile 插件）
 
-本包通过 dsh 的 **profile 补丁层**挂载（与 modlens 等外置插件同机制）：
+本包通过 dsh 的 **profile bundle 机制**持久挂载（与 modlens 等外置插件同机制；注意：直接写 profile 的 `cordis.patch.yml` 插入行会在启动时被消费清空、重启后丢失，请使用下面的 bundle 方式）：
 
 1. 找到你的 dsh profile 目录（默认 `~/.dsh/profiles/web/`）；
 2. 把本包放入 profile 的 `node_modules`：
    - 方式 A：在 profile 目录内执行 `npm install dsh-deepseek-balance`；
    - 方式 B：手动复制本包到 `~/.dsh/profiles/web/node_modules/dsh-deepseek-balance/`；
-3. 在 profile 的 `cordis.patch.yml` 中追加：
-   ```yaml
-   - insert:
-       - id: dsh-deepseek-balance
-         name: 'dsh-deepseek-balance'
+3. 编辑 profile 的 `package.json`，加入依赖与 bundle 条目：
+   ```json
+   {
+     "dependencies": {
+       "dsh-deepseek-balance": "1.1.1"
+     },
+     "dsh": {
+       "profile": {
+         "bundles": [
+           "dsh-deepseek-balance"
+         ]
+       }
+     }
+   }
    ```
+   （包内的 `cordis.patch.yml` 作为 bundle 自举补丁在每次启动时自动应用，不会被消费。）
 4. 重启 harness（`dsh web`）。卡片自动出现在左侧边栏底部，无需批准、无需每次重装。
 
 ## 版本历史
 
+- 1.1.1 — 持久挂载修复：改为 profile bundle 机制（依赖 + bundles 列表 + 包内自举补丁），重启不再丢失；
 - 1.1.0 — 静态 dual-face 重构：Node 原生 fetch + 同源 HTTP 路由（不再依赖 shell/curl）；嵌入式侧边栏卡片置顶（Cordis Plugin 上方）；
 - 1.0.x — 动态 Cordis 插件原型（`cordis_define` + `cordis_run`，见 git 历史）。
 
