@@ -7,6 +7,8 @@ DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek �
 ## 功能
 
 - **实时余额**：调用官方接口 `api.deepseek.com/user/balance`，展示可用总额 / 充值余额 / 赠送余额（支持多币种 CNY/USD）；
+- **今日消耗**：每日基线法统计当天余额总消耗（首次查询记录基线，消耗 = 基线 − 当前余额，充值自动重置基线），基线持久化于 `~/.dsh/dsh-balance-state.json`；
+- **模型渠道感知**：自动读取当前所选模型（`agentDefaultModel`），按其渠道的凭证引用（settings 中 `providers.<id>.apiKeyEnv`）判别 token 来源并加载对应余额；切换模型后 15 秒内自动重新加载；
 - **自动刷新**：每 60 秒自动刷新，支持手动「立即刷新」，状态灯（绿/黄/红）与「更新于 HH:MM:SS」时间戳；
 - **官方充值**：「官方充值 ↗」一键直达 DeepSeek 官方充值页 `platform.deepseek.com/top_up`（新标签页），附 API Key 创建入口；
 - **嵌入式 UI**：显示在左侧边栏底部、Cordis Plugin 选项上方（`sidebar.footer.action` 插槽），随明暗主题自适应；侧边栏收起（rail）时显示金额图标；
@@ -25,8 +27,9 @@ DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek �
 
 - **仓库代码中不包含任何 API Key**。密钥按以下顺序从运行时获取：
   1. 会话内存（用户在面板中输入的密钥）；
-  2. 进程环境变量 `DEEPSEEK_API_KEY`（同步快路径，避免启动期拥塞）；
-  3. DSH 凭证库 ref `DEEPSEEK_BALANCE_API_KEY`（`~/.dsh/.credentials.yaml`）。
+  2. 当前所选模型渠道的凭证引用（settings 中 `providers.<id>.apiKeyEnv`，模型切换时自动切换）；
+  3. 进程环境变量 `DEEPSEEK_API_KEY`（同步快路径，避免启动期拥塞）；
+  4. DSH 凭证库 ref `DEEPSEEK_BALANCE_API_KEY`（`~/.dsh/.credentials.yaml`）。
 - 密钥仅在本机进程内用于调用官方余额接口，不出网、不落盘。
 
 ## 安装（dsh profile 插件）
@@ -41,7 +44,7 @@ DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek �
    ```json
    {
      "dependencies": {
-       "dsh-deepseek-balance": "1.1.1"
+       "dsh-deepseek-balance": "1.2.0"
      },
      "dsh": {
        "profile": {
@@ -57,6 +60,7 @@ DeepSeek Harness 静态 dual-face 插件：在页面内**实时显示 DeepSeek �
 
 ## 版本历史
 
+- 1.2.0 — 模型渠道感知（按所选模型判别 token 来源并自动重载）+ 今日余额总消耗（每日基线法）；
 - 1.1.1 — 持久挂载修复：改为 profile bundle 机制（依赖 + bundles 列表 + 包内自举补丁），重启不再丢失；
 - 1.1.0 — 静态 dual-face 重构：Node 原生 fetch + 同源 HTTP 路由（不再依赖 shell/curl）；嵌入式侧边栏卡片置顶（Cordis Plugin 上方）；
 - 1.0.x — 动态 Cordis 插件原型（`cordis_define` + `cordis_run`，见 git 历史）。
