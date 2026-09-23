@@ -1,7 +1,12 @@
-// dsh-deepseek-balance - Host half.
+// dsh-deepseek-balance - Host half (v1.2.0).
 // Real-time DeepSeek account balance + official top-up entry.
-// Static dual-face plugin: browser calls arrive as same-origin HTTP routes on the
-// local dsh web server (no Remote service, no dynamic harness RPC, no shell/curl).
+// v1.2: model-aware credential resolution (selected provider -> apiKeyEnv ref
+// from the settings providers table) and a per-day consumption baseline
+// persisted under ~/.dsh/dsh-balance-state.json.
+
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { readFile, writeFile } from 'node:fs/promises'
 
 const BALANCE_URL = 'https://api.deepseek.com/user/balance'
 const TOPUP_URL = 'https://platform.deepseek.com/top_up'
@@ -11,9 +16,48 @@ const KEY_REF_ENV = 'DEEPSEEK_API_KEY'
 const KEY_PATTERN = /^sk-[A-Za-z0-9]{8,64}$/
 
 let sessionKey = ''
+let envCache = ''
 
 export const name = 'dsh-deepseek-balance'
 export const inject = []
+
+function statePath() {
+  try {
+    return join(homedir(), '.dsh', 'dsh-balance-state.json')
+  } catch (err) {
+    return ''
+  }
+}
+
+async function loadState() {
+  const p = statePath()
+  if (p === '') return { date: '', base: {} }
+  try {
+    const parsed = JSON.parse(await readFile(p, 'utf8'))
+    if (parsed && typeof parsed === 'object') {
+      return {
+        date: typeof parsed.date === 'string' ? parsed.date : '',
+        base: parsed.base && typeof parsed.base === 'object' ? parsed.base : {},
+      }
+    }
+  } catch (err) {}
+  return { date: '', base: {} }
+}
+
+async function saveState(state) {
+  const p = statePath()
+  if (p === '') return
+  try {
+    await writeFile(p, JSON.stringify(state), 'utf8')
+  } catch (err) {}
+}
+
+function localDate() {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return d.getFullYear() + '-' + m + '-' + day
+}
 
 function maskKey(key) {
   if (typeof key !== 'string' || key.length < 8) return ''
@@ -33,33 +77,87 @@ export function apply(ctx) {
   })
 }
 
-async function resolveKey(ctx) {
-  // 快速路径：同步读进程环境变量并缓存，请求路径零异步依赖，
-  // 避免启动高峰期事件循环拥塞导致浏览器端超时；凭证库仅作后备。
-  if (sessionKey !== '') return { key: sessionKey, source: 'session' }
+async function currentSelection(ctx) {
   try {
-    const env = process.env[KEY_REF_ENV]
-    if (typeof env === 'string' && env !== '' && KEY_PATTERN.test(env)) {
-      sessionKey = env
-      return { key: env, source: 'env' }
+    const am = ctx.get('agentDefaultModel')
+    if (am && typeof am.currentSelection === 'function') {
+      const sel = am.currentSelection()
+      if (sel && typeof sel === 'object') {
+        return {
+          provider: typeof sel.provider === 'string' ? sel.provider : '',
+          model: typeof sel.model === 'string' ? sel.model : '',
+        }
+      }
     }
   } catch (err) {}
+  return { provider: '', model: '' }
+}
+
+async function providerCredentialRef(ctx, providerId) {
+  if (providerId === '') return ''
+  const settings = ctx.get('settings')
+  if (!settings || typeof settings.get !== 'function' || typeof settings.describe !== 'function') return ''
+  try {
+    const descs = settings.describe()
+    if (Array.isArray(descs)) {
+      for (const d of descs) {
+        let doc
+        try {
+          doc = settings.get(d.ns)
+        } catch (err) {
+          continue
+        }
+        if (doc && typeof doc === 'object' && doc.providers && typeof doc.providers === 'object') {
+          const entry = doc.providers[providerId]
+          if (entry && typeof entry.apiKeyEnv === 'string' && entry.apiKeyEnv.trim() !== '') {
+            return entry.apiKeyEnv.trim()
+          }
+        }
+      }
+    }
+  } catch (err) {}
+  return ''
+}
+
+async function resolveCredentialValue(ctx, ref) {
   const creds = ctx.get('credentials')
   if (creds && typeof creds.resolve === 'function') {
-    for (const ref of [KEY_REF_STORED, KEY_REF_ENV]) {
-      try {
-        const resolved = await creds.resolve(ref)
-        if (resolved && typeof resolved.value === 'string' && resolved.value !== '') {
-          return { key: resolved.value, source: ref === KEY_REF_STORED ? 'stored' : 'env' }
-        }
-      } catch (err) {}
-    }
+    try {
+      const resolved = await creds.resolve(ref)
+      if (resolved && typeof resolved.value === 'string' && resolved.value !== '') return resolved.value
+    } catch (err) {}
   }
   try {
-    const env = process.env[KEY_REF_ENV]
-    if (typeof env === 'string' && env !== '') return { key: env, source: 'env' }
+    const env = process.env[ref]
+    if (typeof env === 'string' && env !== '') return env
   } catch (err) {}
-  return { key: '', source: 'none' }
+  return ''
+}
+
+async function resolveKey(ctx) {
+  const sel = await currentSelection(ctx)
+  // 1) 手动输入的密钥（会话内存，最高优先）
+  if (sessionKey !== '') return { key: sessionKey, source: 'session', provider: sel.provider, model: sel.model, ref: '' }
+  // 2) 按当前所选模型渠道解析凭证引用（settings 中 providers.<id>.apiKeyEnv）
+  const ref = await providerCredentialRef(ctx, sel.provider)
+  if (ref !== '') {
+    const value = await resolveCredentialValue(ctx, ref)
+    if (value === '') return { key: '', source: 'missing', provider: sel.provider, model: sel.model, ref }
+    if (!KEY_PATTERN.test(value)) return { key: '', source: 'invalid', provider: sel.provider, model: sel.model, ref }
+    return { key: value, source: 'model', provider: sel.provider, model: sel.model, ref }
+  }
+  // 3) DeepSeek 默认环境变量（同步快路径 + 缓存）
+  if (envCache === '') {
+    try {
+      const env = process.env[KEY_REF_ENV]
+      if (typeof env === 'string' && env !== '' && KEY_PATTERN.test(env)) envCache = env
+    } catch (err) {}
+  }
+  if (envCache !== '') return { key: envCache, source: 'env', provider: sel.provider, model: sel.model, ref: KEY_REF_ENV }
+  // 4) DSH 凭证库中保存的密钥
+  const stored = await resolveCredentialValue(ctx, KEY_REF_STORED)
+  if (stored !== '') return { key: stored, source: 'stored', provider: sel.provider, model: sel.model, ref: KEY_REF_STORED }
+  return { key: '', source: 'none', provider: sel.provider, model: sel.model, ref: '' }
 }
 
 async function fetchBalance(key) {
@@ -103,6 +201,26 @@ async function fetchBalance(key) {
   }
 }
 
+function updateTodayState(state, balance) {
+  const today = localDate()
+  if (state.date !== today) {
+    state.date = today
+    state.base = {}
+  }
+  const list = []
+  for (const info of balance.infos) {
+    const base = state.base[info.currency]
+    if (base === undefined || info.total === '' || parseFloat(info.total) >= parseFloat(base)) {
+      if (info.total !== '') state.base[info.currency] = info.total
+      list.push({ currency: info.currency, consumed: '0.00' })
+    } else {
+      const consumed = (parseFloat(base) - parseFloat(info.total)).toFixed(2)
+      list.push({ currency: info.currency, consumed })
+    }
+  }
+  return list
+}
+
 function json(res, code, body) {
   res.writeHead(code, { 'content-type': 'application/json' })
   res.end(JSON.stringify(body))
@@ -129,7 +247,14 @@ function registerRoutes(webServer, ctx) {
       try {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         const found = await resolveKey(ctx)
-        return json(res, 200, { hasKey: found.key !== '', masked: maskKey(found.key), source: found.source })
+        return json(res, 200, {
+          hasKey: found.key !== '',
+          masked: maskKey(found.key),
+          source: found.source,
+          provider: found.provider,
+          model: found.model,
+          ref: found.ref,
+        })
       } catch (err) {
         return json(res, 500, { error: String(err && err.message ? err.message : err) })
       }
@@ -195,9 +320,24 @@ function registerRoutes(webServer, ctx) {
       try {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         const found = await resolveKey(ctx)
-        if (found.key === '') return json(res, 200, { ok: false, error: '尚未配置 DeepSeek API Key', needKey: true })
-        if (!KEY_PATTERN.test(found.key)) return json(res, 200, { ok: false, error: '检测到已配置的密钥格式异常，请在面板中重新输入 API Key', needKey: true })
+        if (found.key === '') {
+          const reason = found.source === 'missing'
+            ? '所选模型渠道（' + found.provider + '）的密钥未配置（凭证引用 ' + found.ref + '）'
+            : found.source === 'invalid'
+              ? '所选模型渠道（' + found.provider + '）的密钥不是 DeepSeek sk- 密钥'
+              : '尚未配置 DeepSeek API Key'
+          return json(res, 200, { ok: false, error: reason, needKey: true, source: found.source, provider: found.provider, model: found.model, ref: found.ref })
+        }
         const outcome = await fetchBalance(found.key)
+        outcome.source = found.source
+        outcome.provider = found.provider
+        outcome.model = found.model
+        outcome.ref = found.ref
+        if (outcome.ok) {
+          const state = await loadState()
+          outcome.today = updateTodayState(state, outcome.balance)
+          await saveState(state)
+        }
         return json(res, 200, outcome)
       } catch (err) {
         return json(res, 500, { error: String(err && err.message ? err.message : err) })
