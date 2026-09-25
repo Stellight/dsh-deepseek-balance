@@ -31,17 +31,19 @@ function statePath() {
 
 async function loadState() {
   const p = statePath()
-  if (p === '') return { date: '', base: {} }
+  if (p === '') return { date: '', start: {}, toppedUp: {}, prev: {} }
   try {
     const parsed = JSON.parse(await readFile(p, 'utf8'))
     if (parsed && typeof parsed === 'object') {
       return {
         date: typeof parsed.date === 'string' ? parsed.date : '',
-        base: parsed.base && typeof parsed.base === 'object' ? parsed.base : {},
+        start: parsed.start && typeof parsed.start === 'object' ? parsed.start : {},
+        toppedUp: parsed.toppedUp && typeof parsed.toppedUp === 'object' ? parsed.toppedUp : {},
+        prev: parsed.prev && typeof parsed.prev === 'object' ? parsed.prev : {},
       }
     }
   } catch (err) {}
-  return { date: '', base: {} }
+  return { date: '', start: {}, toppedUp: {}, prev: {} }
 }
 
 async function saveState(state) {
@@ -74,6 +76,7 @@ export function apply(ctx) {
       return
     }
     registerRoutes(webServer, ctx)
+    armMidnightSnapshot(ctx)
   })
 }
 
@@ -204,19 +207,38 @@ async function fetchBalance(key) {
 function updateTodayState(state, balance) {
   const today = localDate()
   if (state.date !== today) {
+    // 新的一天：无午夜快照（进程白天才启动，昨夜无消耗）时以当前余额为新基线；
+    // 若进程跨夜运行，午夜快照定时器已把 state.date 置为今天并记录快照基准，此处不重置。
     state.date = today
-    state.base = {}
+    state.start = {}
+    state.toppedUp = {}
+    state.prev = {}
+    for (const info of balance.infos) {
+      if (info.total !== '') {
+        state.start[info.currency] = info.total
+        state.toppedUp[info.currency] = '0'
+        state.prev[info.currency] = info.total
+      }
+    }
   }
   const list = []
   for (const info of balance.infos) {
-    const base = state.base[info.currency]
-    if (base === undefined || info.total === '' || parseFloat(info.total) >= parseFloat(base)) {
-      if (info.total !== '') state.base[info.currency] = info.total
-      list.push({ currency: info.currency, consumed: '0.00' })
-    } else {
-      const consumed = (parseFloat(base) - parseFloat(info.total)).toFixed(2)
-      list.push({ currency: info.currency, consumed })
+    const cur = parseFloat(info.total)
+    const prevRaw = typeof state.prev[info.currency] === 'string' ? state.prev[info.currency] : (typeof state.start[info.currency] === 'string' ? state.start[info.currency] : '0')
+    const prev = parseFloat(prevRaw)
+    if (Number.isFinite(prev) && Number.isFinite(cur) && cur > prev) {
+      // 余额回升：视为充值，累计进 toppedUp，不清零当日消耗
+      const topped = parseFloat(typeof state.toppedUp[info.currency] === 'string' ? state.toppedUp[info.currency] : '0')
+      state.toppedUp[info.currency] = ((Number.isFinite(topped) ? topped : 0) + (cur - prev)).toFixed(2)
     }
+    if (info.total !== '') state.prev[info.currency] = info.total
+    const start = parseFloat(typeof state.start[info.currency] === 'string' ? state.start[info.currency] : '0')
+    const topped = parseFloat(typeof state.toppedUp[info.currency] === 'string' ? state.toppedUp[info.currency] : '0')
+    let consumed = 0
+    if (Number.isFinite(start) && Number.isFinite(topped) && Number.isFinite(cur)) {
+      consumed = Math.max(0, start + topped - cur)
+    }
+    list.push({ currency: info.currency, consumed: consumed.toFixed(2) })
   }
   return list
 }
@@ -236,6 +258,50 @@ async function readJsonBody(req) {
   }
   if (chunks.length === 0) return {}
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+}
+
+let midnightTimer = null
+function armMidnightSnapshot(ctx) {
+  if (midnightTimer !== null) return
+  const now = Date.now()
+  const d = new Date(now)
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 2)
+  const delay = Math.max(1000, next.getTime() - now)
+  midnightTimer = setTimeout(async () => {
+    midnightTimer = null
+    let ok = false
+    try {
+      const found = await resolveKey(ctx)
+      if (found.key !== '' && KEY_PATTERN.test(found.key)) {
+        const outcome = await fetchBalance(found.key)
+        if (outcome.ok) {
+          const state = await loadState()
+          const today = localDate()
+          state.date = today
+          state.start = {}
+          state.toppedUp = {}
+          state.prev = {}
+          for (const info of outcome.balance.infos) {
+            if (info.total !== '') {
+              state.start[info.currency] = info.total
+              state.toppedUp[info.currency] = '0'
+              state.prev[info.currency] = info.total
+            }
+          }
+          await saveState(state)
+          ok = true
+        }
+      }
+    } catch (err) {}
+    if (ok) {
+      armMidnightSnapshot(ctx)
+    } else {
+      midnightTimer = setTimeout(() => {
+        midnightTimer = null
+        armMidnightSnapshot(ctx)
+      }, 60000)
+    }
+  }, delay)
 }
 
 function registerRoutes(webServer, ctx) {
