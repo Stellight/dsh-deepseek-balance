@@ -1,6 +1,6 @@
 {
     "name":  "dsh-deepseek-balance",
-    "version":  "1.2.0",
+    "version":  "1.2.1",
     "description":  "DeepSeek Harness plugin: real-time DeepSeek account balance widget with official top-up entry",
     "type":  "module",
     "exports":  {
