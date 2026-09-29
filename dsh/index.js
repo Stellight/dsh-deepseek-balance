@@ -1,4 +1,4 @@
-// dsh-deepseek-balance - Host half (v1.2.0).
+// dsh-deepseek-balance - Host half (v1.3.0).
 // Real-time DeepSeek account balance + official top-up entry.
 // v1.2: model-aware credential resolution (selected provider -> apiKeyEnv ref
 // from the settings providers table) and a per-day consumption baseline
@@ -80,47 +80,6 @@ export function apply(ctx) {
   })
 }
 
-async function currentSelection(ctx) {
-  try {
-    const am = ctx.get('agentDefaultModel')
-    if (am && typeof am.currentSelection === 'function') {
-      const sel = am.currentSelection()
-      if (sel && typeof sel === 'object') {
-        return {
-          provider: typeof sel.provider === 'string' ? sel.provider : '',
-          model: typeof sel.model === 'string' ? sel.model : '',
-        }
-      }
-    }
-  } catch (err) {}
-  return { provider: '', model: '' }
-}
-
-async function providerCredentialRef(ctx, providerId) {
-  if (providerId === '') return ''
-  const settings = ctx.get('settings')
-  if (!settings || typeof settings.get !== 'function' || typeof settings.describe !== 'function') return ''
-  try {
-    const descs = settings.describe()
-    if (Array.isArray(descs)) {
-      for (const d of descs) {
-        let doc
-        try {
-          doc = settings.get(d.ns)
-        } catch (err) {
-          continue
-        }
-        if (doc && typeof doc === 'object' && doc.providers && typeof doc.providers === 'object') {
-          const entry = doc.providers[providerId]
-          if (entry && typeof entry.apiKeyEnv === 'string' && entry.apiKeyEnv.trim() !== '') {
-            return entry.apiKeyEnv.trim()
-          }
-        }
-      }
-    }
-  } catch (err) {}
-  return ''
-}
 
 async function resolveCredentialValue(ctx, ref) {
   const creds = ctx.get('credentials')
@@ -138,29 +97,19 @@ async function resolveCredentialValue(ctx, ref) {
 }
 
 async function resolveKey(ctx) {
-  const sel = await currentSelection(ctx)
-  // 1) 手动输入的密钥（会话内存，最高优先）
-  if (sessionKey !== '') return { key: sessionKey, source: 'session', provider: sel.provider, model: sel.model, ref: '' }
-  // 2) 按当前所选模型渠道解析凭证引用（settings 中 providers.<id>.apiKeyEnv）
-  const ref = await providerCredentialRef(ctx, sel.provider)
-  if (ref !== '') {
-    const value = await resolveCredentialValue(ctx, ref)
-    if (value === '') return { key: '', source: 'missing', provider: sel.provider, model: sel.model, ref }
-    if (!KEY_PATTERN.test(value)) return { key: '', source: 'invalid', provider: sel.provider, model: sel.model, ref }
-    return { key: value, source: 'model', provider: sel.provider, model: sel.model, ref }
-  }
-  // 3) DeepSeek 默认环境变量（同步快路径 + 缓存）
+  // 仅使用 DeepSeek 官方账户的密钥：手动输入 > 环境变量 > 凭证库保存值。
+  // （按所选模型渠道切换余额的功能已移除。）
+  if (sessionKey !== '') return { key: sessionKey, source: 'session' }
   if (envCache === '') {
     try {
       const env = process.env[KEY_REF_ENV]
       if (typeof env === 'string' && env !== '' && KEY_PATTERN.test(env)) envCache = env
     } catch (err) {}
   }
-  if (envCache !== '') return { key: envCache, source: 'env', provider: sel.provider, model: sel.model, ref: KEY_REF_ENV }
-  // 4) DSH 凭证库中保存的密钥
+  if (envCache !== '') return { key: envCache, source: 'env' }
   const stored = await resolveCredentialValue(ctx, KEY_REF_STORED)
-  if (stored !== '') return { key: stored, source: 'stored', provider: sel.provider, model: sel.model, ref: KEY_REF_STORED }
-  return { key: '', source: 'none', provider: sel.provider, model: sel.model, ref: '' }
+  if (stored !== '') return { key: stored, source: 'stored' }
+  return { key: '', source: 'none' }
 }
 
 async function fetchBalance(key) {
@@ -317,9 +266,6 @@ function registerRoutes(webServer, ctx) {
           hasKey: found.key !== '',
           masked: maskKey(found.key),
           source: found.source,
-          provider: found.provider,
-          model: found.model,
-          ref: found.ref,
         })
       } catch (err) {
         return json(res, 500, { error: String(err && err.message ? err.message : err) })
@@ -387,18 +333,10 @@ function registerRoutes(webServer, ctx) {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
         const found = await resolveKey(ctx)
         if (found.key === '') {
-          const reason = found.source === 'missing'
-            ? '所选模型渠道（' + found.provider + '）的密钥未配置（凭证引用 ' + found.ref + '）'
-            : found.source === 'invalid'
-              ? '所选模型渠道（' + found.provider + '）的密钥不是 DeepSeek sk- 密钥'
-              : '尚未配置 DeepSeek API Key'
-          return json(res, 200, { ok: false, error: reason, needKey: true, source: found.source, provider: found.provider, model: found.model, ref: found.ref })
+          return json(res, 200, { ok: false, error: '尚未配置 DeepSeek API Key', needKey: true, source: found.source })
         }
         const outcome = await fetchBalance(found.key)
         outcome.source = found.source
-        outcome.provider = found.provider
-        outcome.model = found.model
-        outcome.ref = found.ref
         if (outcome.ok) {
           const state = await loadState()
           outcome.today = updateTodayState(state, outcome.balance)
