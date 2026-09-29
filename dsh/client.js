@@ -153,10 +153,7 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
         var todayState = react.useState(null)
         var today = todayState[0]
         var setToday = todayState[1]
-        var modelKeyRef = react.useRef('')
-        var modelLabelState = react.useState('')
-        var modelLabel = modelLabelState[0]
-        var setModelLabel = modelLabelState[1]
+
 
         function loadConfig() {
           return jsonRequest('/dsh-balance/config')
@@ -265,25 +262,6 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
           }
         }, [])
 
-        react.useEffect(function () {
-          var timer = setInterval(function () {
-            jsonRequest('/dsh-balance/config', { timeoutMs: 10000 })
-              .then(function (cfg) {
-                if (!cfg || typeof cfg !== 'object' || typeof cfg.hasKey !== 'boolean') return
-                var key = (cfg.provider || '') + '/' + (cfg.model || '')
-                var changed = modelKeyRef.current !== '' && modelKeyRef.current !== key
-                modelKeyRef.current = key
-                setModelLabel((cfg.provider || '') + (cfg.model ? ' / ' + cfg.model : ''))
-                if (changed && cfg.hasKey === true) {
-                  refresh()
-                }
-              })
-              .catch(function () {})
-          }, 15000)
-          return function () {
-            clearInterval(timer)
-          }
-        }, [])
 
 
 
@@ -297,8 +275,6 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
               .then(function (cfg) {
                 if (cancelled) return
                 if (cfg && typeof cfg === 'object' && typeof cfg.hasKey === 'boolean') {
-                  modelKeyRef.current = (cfg.provider || '') + '/' + (cfg.model || '')
-                  setModelLabel((cfg.provider || '') + (cfg.model ? ' / ' + cfg.model : ''))
                   setConfig(cfg)
                   setStatus('idle')
                   setError('')
@@ -370,12 +346,7 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
             'div',
             { className: 'dsb-card' },
             header,
-            h('div', { className: 'dsb-hint' },
-              config.source === 'missing'
-                ? '所选模型渠道的密钥未配置（凭证引用 ' + (config.ref || '?') + '），可手动输入密钥覆盖'
-                : config.source === 'invalid'
-                  ? '所选模型渠道的密钥不是 DeepSeek sk- 密钥，可手动输入覆盖'
-                  : '输入 DeepSeek API Key 以查询账户余额'),
+            h('div', { className: 'dsb-hint' }, '输入 DeepSeek API Key 以查询账户余额'),
             h(
               'div',
               { className: 'dsb-input-row' },
@@ -466,7 +437,7 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
             }
           }
         }
-        var sourceLabel = config.source === 'env' ? '环境变量' : config.source === 'stored' ? '已保存' : config.source === 'model' ? '模型渠道' : config.source === 'missing' ? '未配置' : config.source === 'invalid' ? '格式异常' : '本会话'
+        var sourceLabel = config.source === 'env' ? '环境变量' : config.source === 'stored' ? '已保存' : '本会话'
         children.push(
           h(
             'div',
@@ -495,9 +466,7 @@ div:has(> div[data-slot="sidebar.footer.action"]) { flex-wrap: wrap; row-gap: 8p
                 ),
           ),
         )
-        if (modelLabel !== '') {
-          children.push(h('div', { key: 'model', className: 'dsb-hint dsb-hint-sub' }, '当前模型: ' + modelLabel + (config.source === 'model' ? '（余额按此渠道密钥）' : '')))
-        }
+
         if (updatedAt !== null) {
           children.push(h('div', { key: 'upd', className: 'dsb-updated' }, '更新于 ' + new Date(updatedAt).toLocaleTimeString()))
         }
